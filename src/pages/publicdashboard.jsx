@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Navbar from './navbar';
+import { listReports } from '../api/reports';
 
 const theme = {
   colors: {
@@ -15,7 +16,7 @@ const theme = {
 export default function PublicDashboard() {
   const [activeTab, setActiveTab] = useState('alerts');
   const [selectedId, setSelectedId] = useState(null);
-  const [events, setEvents] = useState(() => loadEvents());
+  const [events, setEvents] = useState([]);
   const [isVerified, setIsVerified] = useState(() => !!localStorage.getItem('travya_public_verified'));
   const [requestPending, setRequestPending] = useState(() => !!localStorage.getItem('travya_public_request'));
   const historyEvents = [
@@ -35,16 +36,41 @@ export default function PublicDashboard() {
     return { x, y };
   };
 
-  // Listen to storage events (SOS from apphome.jsx) and also poll every few seconds
+  // Load events from DB and refresh periodically
   useEffect(() => {
-    const onStorage = (e) => {
-      if (e.key === 'travya_sos_events') {
-        setEvents(loadEvents());
+    let mounted = true;
+    (async () => {
+      try {
+        const reports = await listReports();
+        if (!mounted) return;
+        const mapped = (reports || []).map((r) => ({
+          id: String(r.id),
+          name: r.area_name || 'Area',
+          lat: r.latitude ?? 31.105,
+          lng: r.longitude ?? 77.173,
+          ts: r.created_at ? new Date(r.created_at).getTime() : Date.now(),
+          phone: r.reporter_phone || '',
+        }));
+        setEvents(mapped);
+      } catch (e) {
+        setEvents([]);
       }
-    };
-    window.addEventListener('storage', onStorage);
-    const iv = setInterval(() => setEvents(loadEvents()), 3000);
-    return () => { window.removeEventListener('storage', onStorage); clearInterval(iv); };
+    })();
+    const iv = setInterval(async () => {
+      try {
+        const reports = await listReports();
+        const mapped = (reports || []).map((r) => ({
+          id: String(r.id),
+          name: r.area_name || 'Area',
+          lat: r.latitude ?? 31.105,
+          lng: r.longitude ?? 77.173,
+          ts: r.created_at ? new Date(r.created_at).getTime() : Date.now(),
+          phone: r.reporter_phone || '',
+        }));
+        setEvents(mapped);
+      } catch {}
+    }, 5000);
+    return () => { mounted = false; clearInterval(iv); };
   }, []);
 
   // Map size observer
@@ -102,7 +128,7 @@ export default function PublicDashboard() {
         )}
 
         {/* Live SOS banner + list */}
-        {events.length > 0 && (
+{events.length > 0 && (
           <div style={styles.sosWrap}>
             <div style={styles.sosBanner}>
               <div style={styles.sosDot} />

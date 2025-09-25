@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Navbar from './navbar';
+import { listTourists } from '../api/tourists';
+import { listReports } from '../api/reports';
 
 // Light theme matching apphome.jsx
 const theme = {
@@ -23,14 +25,7 @@ const theme = {
   },
 };
 
-// Dummy tourist data near Shimla
-const initialTourists = [
-  { id: 'T-1001', name: 'Aarav Sharma', phone: '+91 98xxxxxx01', lat: 31.1058, lng: 77.1739, zone: 'safe' },
-  { id: 'T-1002', name: 'Isha Gupta', phone: '+91 98xxxxxx02', lat: 31.1052, lng: 77.1721, zone: 'safe' },
-  { id: 'T-1003', name: 'Rohan Mehta', phone: '+91 98xxxxxx03', lat: 31.1039, lng: 77.1703, zone: 'danger' },
-  { id: 'T-1004', name: 'Sara Khan', phone: '+91 98xxxxxx04', lat: 31.1067, lng: 77.1752, zone: 'safe' },
-  { id: 'T-1005', name: 'Vikram Rao', phone: '+91 98xxxxxx05', lat: 31.1041, lng: 77.1764, zone: 'danger' },
-];
+// DB-driven: tourists and reports
 
 export default function PoliceDashboard() {
   const [activeTab, setActiveTab] = useState('overview');
@@ -39,7 +34,8 @@ export default function PoliceDashboard() {
   const mapRef = useRef(null);
   const mapSectionRef = useRef(null);
   const [mapSize, setMapSize] = useState({ width: 0, height: 0 });
-  const [sosEvents, setSosEvents] = useState(() => loadEvents());
+  const [sosEvents, setSosEvents] = useState([]);
+  const [tourists, setTourists] = useState([]);
   const [elapsed, setElapsed] = useState('00:00');
   const [showEfirs, setShowEfirs] = useState(false);
   const historyEvents = [
@@ -55,7 +51,66 @@ export default function PoliceDashboard() {
     maxLng: 77.1785,
   }), []);
 
-  const tourists = initialTourists;
+  // Load tourists from DB
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const rows = await listTourists();
+        if (!mounted) return;
+        // Map to minimal fields used in UI; fallback lat/lng if absent
+        const mapped = (rows || []).map((r, idx) => ({
+          id: r.id || `T-${idx}`,
+          name: r.fullname || 'Unknown',
+          phone: r.phoneno || '',
+          lat: r.last_latitude ?? 31.105 + Math.random() * 0.003 - 0.0015,
+          lng: r.last_longitude ?? 77.173 + Math.random() * 0.003 - 0.0015,
+          zone: r.verified ? 'safe' : 'danger',
+        }));
+        setTourists(mapped);
+      } catch (e) {
+        setTourists([]);
+      }
+    })();
+    return () => { mounted = false; };
+  }, []);
+
+  // Load latest reports from DB and treat them as SOS-like events
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const reports = await listReports();
+        if (!mounted) return;
+        const mapped = (reports || []).map((r) => ({
+          id: String(r.id),
+          name: r.area_name || 'Area',
+          phone: r.reporter_phone || '',
+          lat: r.latitude ?? 31.105,
+          lng: r.longitude ?? 77.173,
+          ts: r.created_at ? new Date(r.created_at).getTime() : Date.now(),
+        }));
+        setSosEvents(mapped);
+      } catch (e) {
+        setSosEvents([]);
+      }
+    })();
+    const iv = setInterval(async () => {
+      try {
+        const reports = await listReports();
+        const mapped = (reports || []).map((r) => ({
+          id: String(r.id),
+          name: r.area_name || 'Area',
+          phone: r.reporter_phone || '',
+          lat: r.latitude ?? 31.105,
+          lng: r.longitude ?? 77.173,
+          ts: r.created_at ? new Date(r.created_at).getTime() : Date.now(),
+        }));
+        setSosEvents(mapped);
+      } catch {}
+    }, 5000);
+    return () => { mounted = false; clearInterval(iv); };
+  }, []);
 
   const projectToMap = (lat, lng, width, height) => {
     // Simple linear projection within bounds → x,y in px
@@ -79,15 +134,7 @@ export default function PoliceDashboard() {
     };
   }, []);
 
-  // Listen to storage updates for SOS events
-  useEffect(() => {
-    const onStorage = (e) => {
-      if (e.key === 'travya_sos_events') setSosEvents(loadEvents());
-    };
-    window.addEventListener('storage', onStorage);
-    const iv = setInterval(() => setSosEvents(loadEvents()), 3000);
-    return () => { window.removeEventListener('storage', onStorage); clearInterval(iv); };
-  }, []);
+  // (DB-based events; storage listener removed)
 
   // Stopwatch for most recent SOS
   useEffect(() => {
@@ -108,14 +155,9 @@ export default function PoliceDashboard() {
   }, [activeTab]);
 
   const resolveSOS = (id) => {
-    try {
-      const list = loadEvents();
-      const next = list.filter((e) => e.id !== id);
-      // If not found (e.g., dummy fallback), clear all
-      const finalList = next.length === list.length ? [] : next;
-      localStorage.setItem('travya_sos_events', JSON.stringify(finalList));
-      setSosEvents(finalList);
-    } catch (_) {}
+    // In DB mode, resolving would require updating backend status.
+    // For now, optimistically hide from list client-side.
+    setSosEvents((list) => list.filter((e) => e.id !== id));
   };
 
   const onPinClick = (id) => {
